@@ -67,4 +67,39 @@ void main() {
       ),
     );
   });
+
+  test('updateUser patches the expected body to /users/{id}', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://example.com'));
+    late RequestOptions captured;
+
+    dio.httpClientAdapter = JsonAdapter((options) async {
+      captured = options;
+      return jsonBody({
+        'status': true,
+        'message': 'User updated successfully.',
+        'data': {'id': '82726b83-c49d-45c9-b595-e14e52cdc057'},
+      });
+    });
+
+    final message = await UsersRepository(ApiClient(dio)).updateUser(
+      userPublicId: '82726b83-c49d-45c9-b595-e14e52cdc057',
+      firstName: 'Pritesh',
+      lastName: 'Chavarkar',
+      email: 'pritesh@example.com',
+      mobile: '9769363548',
+    );
+
+    expect(
+      captured.path,
+      ApiEndpoints.user('82726b83-c49d-45c9-b595-e14e52cdc057'),
+    );
+    expect(captured.method, 'PATCH');
+    expect(captured.data, {
+      'firstName': 'Pritesh',
+      'lastName': 'Chavarkar',
+      'email': 'pritesh@example.com',
+      'mobile': '9769363548',
+    });
+    expect(message, 'User updated successfully.');
+  });
 }

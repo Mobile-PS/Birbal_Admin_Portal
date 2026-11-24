@@ -21,6 +21,13 @@ class AuthInterceptor extends QueuedInterceptor {
     RequestInterceptorHandler handler,
   ) async {
     final token = await _tokenStore.readToken();
+    if (kDebugMode) {
+      debugPrint(
+        token == null || token.isEmpty
+            ? 'Auth token: <none> → ${options.method} ${options.uri}'
+            : 'Auth token: $token → ${options.method} ${options.uri}',
+      );
+    }
     if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $token';
     }
@@ -133,7 +140,7 @@ class DebugLogInterceptor extends Interceptor {
         ..writeln('')
         ..writeln('┌──────────── REQUEST ────────────')
         ..writeln('│ ${options.method} ${options.uri}')
-        ..writeln('│ Headers: ${_pretty(_redacted(options.headers))}');
+        ..writeln('│ Headers: ${_pretty(options.headers)}');
       if (options.queryParameters.isNotEmpty) {
         buffer.writeln('│ Query: ${_pretty(options.queryParameters)}');
       }
@@ -185,15 +192,6 @@ class DebugLogInterceptor extends Interceptor {
       debugPrint(buffer.toString());
     }
     handler.next(err);
-  }
-
-  Map<String, Object?> _redacted(Map<String, dynamic> headers) {
-    return {
-      for (final entry in headers.entries)
-        entry.key: entry.key.toLowerCase() == 'authorization'
-            ? 'Bearer •••'
-            : entry.value,
-    };
   }
 
   String _pretty(Object? data) {

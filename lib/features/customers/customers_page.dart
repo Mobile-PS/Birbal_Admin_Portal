@@ -1,11 +1,18 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/app_scope.dart';
 import '../../app/theme/app_colors.dart';
+import '../../core/network/api_exception.dart';
+import '../../core/utils/customer_application_pdf.dart';
+import '../../core/utils/policy_document_viewer.dart';
+import '../../core/widgets/app_snackbar.dart';
+import '../../data/models/customer_list_filter.dart';
 import '../../data/models/customer_summary.dart';
-import '../../data/sample/sample_customers.dart';
-
-enum _CustomerTab { all, activePolicy, renewalDue, noPolicy }
+import '../../data/repositories/customers_repository.dart';
+import '../../data/repositories/dashboard_repository.dart';
 
 enum _CustomerSort { nameAsc, nameDesc }
 
@@ -18,10 +25,28 @@ class CustomersPage extends StatefulWidget {
 
 class _CustomersPageState extends State<CustomersPage> {
   static const _accent = Color(0xFF2F6BFF);
+  static const _pageSize = 20;
 
   final _searchController = TextEditingController();
-  _CustomerTab _tab = _CustomerTab.all;
+  final _counts = <CustomerListFilter, int>{};
+
+  CustomerListFilter _filter = CustomerListFilter.all;
   _CustomerSort _sort = _CustomerSort.nameAsc;
+  List<CustomerSummary> _customers = const [];
+  String? _error;
+  bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _lastPage = true;
+  int _page = 0;
+  int _totalElements = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load(reset: true);
+    });
+  }
 
   @override
   void dispose() {
@@ -29,26 +54,63 @@ class _CustomersPageState extends State<CustomersPage> {
     super.dispose();
   }
 
-  int _countFor(_CustomerTab tab) {
-    return sampleCustomers.where((customer) => _matchesTab(customer, tab)).length;
-  }
+  Future<void> _load({required bool reset}) async {
+    if (reset) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+        _page = 0;
+        _lastPage = true;
+      });
+    } else {
+      if (_isLoadingMore || _lastPage) return;
+      setState(() => _isLoadingMore = true);
+    }
 
-  bool _matchesTab(CustomerSummary customer, _CustomerTab tab) {
-    return switch (tab) {
-      _CustomerTab.all => true,
-      _CustomerTab.activePolicy =>
-        customer.status == CustomerPolicyStatus.active,
-      _CustomerTab.renewalDue =>
-        customer.status == CustomerPolicyStatus.renewalDue,
-      _CustomerTab.noPolicy =>
-        customer.status == CustomerPolicyStatus.noPolicy,
-    };
+    final requestPage = reset ? 0 : _page + 1;
+
+    try {
+      final result = await DashboardRepository(
+        AppScope.of(context).apiClient,
+      ).fetchUserDetails(
+        filter: _filter,
+        page: requestPage,
+        size: _pageSize,
+      );
+      if (!mounted) return;
+
+      setState(() {
+        _customers = reset
+            ? result.content
+            : [..._customers, ...result.content];
+        _page = result.page;
+        _lastPage = result.last || result.content.isEmpty;
+        _totalElements = result.totalElements;
+        _counts[_filter] = result.totalElements;
+        _isLoading = false;
+        _isLoadingMore = false;
+        _error = null;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Unable to load customers. Please try again.';
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
+    }
   }
 
   List<CustomerSummary> get _visibleCustomers {
     final query = _searchController.text.trim().toLowerCase();
-    final filtered = sampleCustomers.where((customer) {
-      if (!_matchesTab(customer, _tab)) return false;
+    final filtered = _customers.where((customer) {
       if (query.isEmpty) return true;
       return customer.name.toLowerCase().contains(query) ||
           customer.phone.contains(query) ||
@@ -60,6 +122,11 @@ class _CustomersPageState extends State<CustomersPage> {
       return _sort == _CustomerSort.nameAsc ? compared : -compared;
     });
     return filtered;
+  }
+
+  Future<void> _openAddCustomer() async {
+    await context.push('/customers/add');
+    if (mounted) await _load(reset: true);
   }
 
   @override
@@ -79,7 +146,7 @@ class _CustomersPageState extends State<CustomersPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _Header(accent: _accent),
+                    _Header(accent: _accent, onAdd: _openAddCustomer),
                     const SizedBox(height: 16),
                     _SearchField(
                       controller: _searchController,
@@ -87,19 +154,18 @@ class _CustomersPageState extends State<CustomersPage> {
                     ),
                     const SizedBox(height: 14),
                     _StatusTabs(
-                      selected: _tab,
+                      selected: _filter,
                       accent: _accent,
                       counts: {
-                        _CustomerTab.all: sampleCustomers.length,
-                        _CustomerTab.activePolicy: _countFor(
-                          _CustomerTab.activePolicy,
-                        ),
-                        _CustomerTab.renewalDue: _countFor(
-                          _CustomerTab.renewalDue,
-                        ),
-                        _CustomerTab.noPolicy: _countFor(_CustomerTab.noPolicy),
+                        for (final filter in CustomerListFilter.values)
+                          filter: _counts[filter] ??
+                              (filter == _filter ? _totalElements : 0),
                       },
-                      onSelected: (tab) => setState(() => _tab = tab),
+                      onSelected: (filter) {
+                        if (filter == _filter) return;
+                        setState(() => _filter = filter);
+                        _load(reset: true);
+                      },
                     ),
                     const SizedBox(height: 14),
                     Align(
@@ -113,46 +179,102 @@ class _CustomersPageState extends State<CustomersPage> {
                   ],
                 ),
               ),
-              Expanded(
-                child: customers.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'No customers match your search.',
-                          style: TextStyle(color: AppColors.textSecondary),
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: EdgeInsets.fromLTRB(
-                          padding,
-                          4,
-                          padding,
-                          padding + 16,
-                        ),
-                        itemCount: customers.length,
-                        separatorBuilder: (context, index) => const Divider(
-                          height: 1,
-                          color: Color(0xFFE8ECF2),
-                        ),
-                        itemBuilder: (context, index) {
-                          return _CustomerTile(
-                            customer: customers[index],
-                            accent: _accent,
-                          );
-                        },
-                      ),
-              ),
+              Expanded(child: _buildList(customers, padding)),
             ],
           );
         },
       ),
     );
   }
+
+  Widget _buildList(List<CustomerSummary> customers, double padding) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_error != null && _customers.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(padding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => _load(reset: true),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (customers.isEmpty) {
+      return const Center(
+        child: Text(
+          'No customers match your search.',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => _load(reset: true),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification.metrics.pixels >=
+                  notification.metrics.maxScrollExtent - 240 &&
+              !_lastPage &&
+              !_isLoadingMore &&
+              !_isLoading) {
+            _load(reset: false);
+          }
+          return false;
+        },
+        child: ListView.separated(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(padding, 4, padding, padding + 16),
+          itemCount: customers.length + (_isLoadingMore ? 1 : 0),
+          separatorBuilder: (context, index) => const Divider(
+            height: 1,
+            color: Color(0xFFE8ECF2),
+          ),
+          itemBuilder: (context, index) {
+            if (index >= customers.length) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  ),
+                ),
+              );
+            }
+            return _CustomerTile(
+              customer: customers[index],
+              accent: _accent,
+              onCustomerChanged: () => _load(reset: true),
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.accent});
+  const _Header({required this.accent, required this.onAdd});
 
   final Color accent;
+  final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -169,7 +291,7 @@ class _Header extends StatelessWidget {
           ),
         ),
         FilledButton.icon(
-          onPressed: () => context.push('/customers/add'),
+          onPressed: onAdd,
           style: FilledButton.styleFrom(
             backgroundColor: accent,
             foregroundColor: Colors.white,
@@ -238,30 +360,23 @@ class _StatusTabs extends StatelessWidget {
     required this.onSelected,
   });
 
-  final _CustomerTab selected;
-  final Map<_CustomerTab, int> counts;
+  final CustomerListFilter selected;
+  final Map<CustomerListFilter, int> counts;
   final Color accent;
-  final ValueChanged<_CustomerTab> onSelected;
+  final ValueChanged<CustomerListFilter> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    final tabs = <(_CustomerTab, String)>[
-      (_CustomerTab.all, 'All'),
-      (_CustomerTab.activePolicy, 'Active Policy'),
-      (_CustomerTab.renewalDue, 'Renewal Due'),
-      (_CustomerTab.noPolicy, 'No Policy'),
-    ];
-
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          for (final entry in tabs) ...[
+          for (final filter in CustomerListFilter.values) ...[
             _StatusChip(
-              label: '${entry.$2} (${counts[entry.$1] ?? 0})',
-              selected: selected == entry.$1,
+              label: '${filter.label} (${counts[filter] ?? 0})',
+              selected: selected == filter,
               accent: accent,
-              onTap: () => onSelected(entry.$1),
+              onTap: () => onSelected(filter),
             ),
             const SizedBox(width: 8),
           ],
@@ -367,10 +482,87 @@ class _CustomerTile extends StatelessWidget {
   const _CustomerTile({
     required this.customer,
     required this.accent,
+    required this.onCustomerChanged,
   });
 
   final CustomerSummary customer;
   final Color accent;
+  final VoidCallback onCustomerChanged;
+
+  Future<void> _downloadPolicyData(
+    BuildContext context,
+    CustomerSummary customer,
+  ) async {
+    final apiClient = AppScope.of(context).apiClient;
+    var loaderVisible = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                ),
+                SizedBox(width: 14),
+                Text('Preparing policy data PDF...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    void dismissLoader() {
+      if (!loaderVisible || !context.mounted) return;
+      loaderVisible = false;
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
+    try {
+      final application =
+          await CustomersRepository(apiClient).getCustomerApplication(
+        customer.id,
+      );
+      final pdfBytes = await CustomerApplicationPdf.build(application);
+      if (!context.mounted) return;
+      dismissLoader();
+
+      final fileName =
+          'Policy_Login_${application.applicationNumber}_${customer.name}'
+              .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+              .replaceAll(RegExp(r'\s+'), '_');
+      final dataUri =
+          'data:application/pdf;base64,${base64Encode(pdfBytes)}';
+
+      await openBase64Document(
+        context,
+        documentBase64: dataUri,
+        title: 'Policy Login Details',
+        contentType: 'application/pdf',
+        fileName: '$fileName.pdf',
+        unavailableMessage: 'Unable to open the generated PDF.',
+      );
+    } on ApiException catch (error) {
+      dismissLoader();
+      if (!context.mounted) return;
+      showAppMessage(context, 'Unavailable', error.message);
+    } catch (_) {
+      dismissLoader();
+      if (!context.mounted) return;
+      showAppMessage(
+        context,
+        'Failed',
+        'Unable to generate policy data PDF. Please try again.',
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -457,14 +649,50 @@ class _CustomerTile extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           PopupMenuButton<String>(
-            onSelected: (value) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$value for ${customer.name}')),
+            onSelected: (value) async {
+              if (value == 'View') {
+                final changed = await context.push<bool>(
+                  '/customers/policies',
+                  extra: customer,
+                );
+                if (changed == true) onCustomerChanged();
+                return;
+              }
+              if (value == 'Edit') {
+                final updated = await context.push<bool>(
+                  '/customers/edit',
+                  extra: customer,
+                );
+                if (updated == true) onCustomerChanged();
+                return;
+              }
+              if (value == 'Add Policy') {
+                final added = await context.push<bool>(
+                  '/customers/add-policy',
+                  extra: customer,
+                );
+                if (added == true) onCustomerChanged();
+                return;
+              }
+              if (value == 'Download Policy Data') {
+                await _downloadPolicyData(context, customer);
+                return;
+              }
+              if (!context.mounted) return;
+              showAppMessage(
+                context,
+                value,
+                '$value for ${customer.name}',
               );
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'View', child: Text('View')),
               PopupMenuItem(value: 'Edit', child: Text('Edit')),
+              PopupMenuItem(value: 'Add Policy', child: Text('Add Policy')),
+              PopupMenuItem(
+                value: 'Download Policy Data',
+                child: Text('Download Policy Data'),
+              ),
             ],
             icon: const Icon(
               Icons.more_vert_rounded,

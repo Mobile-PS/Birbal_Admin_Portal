@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/theme/app_colors.dart';
 import '../../core/constants/app_assets.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/storage/login_remember_store.dart';
 import '../../core/utils/responsive.dart';
 import '../../core/widgets/app_snackbar.dart';
 import '../../core/widgets/primary_button.dart';
@@ -27,8 +29,11 @@ class _LoginPageState extends State<LoginPage> {
 
   LoginIdentifierType _identifierType = LoginIdentifierType.mobile;
   bool _isLoading = false;
+  bool _rememberMe = false;
+  bool _rememberLoaded = false;
   String _phoneDigits = '';
   String _emailValue = '';
+  LoginRememberStore? _rememberStore;
 
   bool get _isMobile => _identifierType == LoginIdentifierType.mobile;
 
@@ -48,6 +53,9 @@ class _LoginPageState extends State<LoginPage> {
     _emailController.addListener(() {
       setState(() => _emailValue = _emailController.text.trim());
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadRememberedLogin();
+    });
   }
 
   @override
@@ -55,6 +63,43 @@ class _LoginPageState extends State<LoginPage> {
     _phoneController.dispose();
     _emailController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadRememberedLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final store = LoginRememberStore(prefs);
+    final remembered = store.read();
+    setState(() {
+      _rememberStore = store;
+      _rememberMe = store.isEnabled;
+      _rememberLoaded = true;
+      if (remembered != null) {
+        if (remembered.isMobile) {
+          _identifierType = LoginIdentifierType.mobile;
+          _phoneController.text = remembered.identifier;
+          _phoneDigits = remembered.identifier;
+        } else {
+          _identifierType = LoginIdentifierType.email;
+          _emailController.text = remembered.identifier;
+          _emailValue = remembered.identifier;
+        }
+      }
+    });
+  }
+
+  Future<void> _persistRememberPreference({
+    required String type,
+    required String identifier,
+  }) async {
+    final store = _rememberStore ??
+        LoginRememberStore(await SharedPreferences.getInstance());
+    _rememberStore = store;
+    if (_rememberMe) {
+      await store.save(type: type, identifier: identifier);
+    } else {
+      await store.clear();
+    }
   }
 
   void _selectType(LoginIdentifierType type) {
@@ -107,6 +152,8 @@ class _LoginPageState extends State<LoginPage> {
         showAppMessage(context, 'Not registered', result.message);
         return;
       }
+      await _persistRememberPreference(type: type, identifier: identifier);
+      if (!mounted) return;
       showAppMessage(context, 'OTP sent', result.message);
       context.push(
         '/login/otp?identifier=${Uri.encodeComponent(identifier)}&type=$type',
@@ -232,7 +279,40 @@ class _LoginPageState extends State<LoginPage> {
                                   decoration: _emailDecoration(),
                                   validator: _validateEmail,
                                 ),
-                              SizedBox(height: responsive.space(18, 22)),
+                              const SizedBox(height: 8),
+                              if (_rememberLoaded)
+                                CheckboxListTile(
+                                  key: const ValueKey('login-remember-me'),
+                                  value: _rememberMe,
+                                  onChanged: _isLoading
+                                      ? null
+                                      : (value) {
+                                          setState(
+                                            () => _rememberMe = value ?? false,
+                                          );
+                                        },
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  activeColor: AppColors.brand,
+                                  title: const Text(
+                                    'Remember me',
+                                    style: TextStyle(
+                                      color: AppColors.navy,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  subtitle: const Text(
+                                    'Save this mobile or email for next login',
+                                    style: TextStyle(
+                                      color: AppColors.textSecondary,
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                ),
+                              SizedBox(height: responsive.space(14, 18)),
                               PrimaryButton(
                                 label: 'Send OTP',
                                 isLoading: _isLoading,

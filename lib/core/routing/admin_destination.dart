@@ -39,13 +39,6 @@ const adminDestinations = <AdminDestination>[
     subtitle: 'Issued cover across insurers.',
   ),
   AdminDestination(
-    label: 'Claims',
-    path: '/claims',
-    icon: Icons.assignment_outlined,
-    selectedIcon: Icons.assignment_rounded,
-    subtitle: 'Filings, reviews, and settlements.',
-  ),
-  AdminDestination(
     label: 'Inquiries',
     path: '/inquiries',
     icon: Icons.forum_outlined,
@@ -53,17 +46,17 @@ const adminDestinations = <AdminDestination>[
     subtitle: 'Advice requests waiting on the team.',
   ),
   AdminDestination(
+    label: 'CRM',
+    path: '/crm',
+    icon: Icons.handshake_outlined,
+    selectedIcon: Icons.handshake_rounded,
+    subtitle: 'Sales leads and follow-ups.',
+  ),
+  AdminDestination(
     label: 'Product',
     path: '/products',
     icon: Icons.inventory_2_outlined,
     selectedIcon: Icons.inventory_2_rounded,
     subtitle: 'Product categories.',
-  ),
-  AdminDestination(
-    label: 'Settings',
-    path: '/settings',
-    icon: Icons.settings_outlined,
-    selectedIcon: Icons.settings_rounded,
-    subtitle: 'API target and app configuration.',
   ),
 ];

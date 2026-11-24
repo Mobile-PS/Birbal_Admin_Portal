@@ -1,0 +1,68 @@
+# Example Nginx site for Birbal Advice Admin (Flutter web).
+# Point `root` at the contents of `build/web` after `./scripts/build_web.sh`.
+
+server {
+    listen 80;
+    server_name admin.example.com;
+
+    # Prefer HTTPS in production. Uncomment and set certificate paths:
+    # listen 443 ssl http2;
+    # ssl_certificate     /etc/letsencrypt/live/admin.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/admin.example.com/privkey.pem;
+
+    root /var/www/birbal-admin;
+    index index.html;
+
+    # Correct MIME types for Flutter / pdfrx WASM assets.
+    types {
+        application/wasm wasm;
+        application/javascript mjs;
+    }
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Multi-threaded WASM / SharedArrayBuffer support.
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Embedder-Policy "credentialless" always;
+
+    # Hashed / long-lived assets.
+    location ~* \.(?:js|mjs|wasm|css|png|jpg|jpeg|gif|svg|ico|ttf|otf|woff2?)$ {
+        try_files $uri =404;
+        expires 7d;
+        add_header Cache-Control "public";
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "credentialless" always;
+    }
+
+    # Entrypoint: never cache so clients get the latest release.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "credentialless" always;
+    }
+
+    location = /flutter_bootstrap.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "credentialless" always;
+    }
+
+    location = /version.json {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+
+    # SPA fallback for GoRouter paths (/customers, /products, ...).
+    # Do not rewrite missing assets to index.html.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Optional: if API is on the same host, proxy it to avoid CORS/mixed-content.
+    # location /api/ {
+    #     proxy_pass http://127.0.0.1:8080/api/;
+    #     proxy_set_header Host $host;
+    #     proxy_set_header X-Real-IP $remote_addr;
+    #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    #     proxy_set_header X-Forwarded-Proto $scheme;
+    # }
+}

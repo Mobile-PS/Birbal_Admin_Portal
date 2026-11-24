@@ -1,4 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
@@ -10,6 +13,11 @@ import 'data/repositories/auth_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
+  await pdfrxFlutterInitialize();
+
   final preferences = await SharedPreferences.getInstance();
   final tokenStore = SharedPrefsTokenStore(preferences);
 
