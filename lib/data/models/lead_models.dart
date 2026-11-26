@@ -1,3 +1,5 @@
+import '../../core/utils/json_utils.dart';
+
 enum LeadStage {
   newLead('NEW_LEAD', 'New Lead'),
   contacted('CONTACTED', 'Contacted'),
@@ -28,6 +30,27 @@ class SalesAssignee {
 
   final String id;
   final String name;
+
+  factory SalesAssignee.fromJson(Map<String, dynamic> json) {
+    final first = jsonNullableString(json['firstName'] ?? json['first_name']);
+    final last = jsonNullableString(json['lastName'] ?? json['last_name']);
+    final composed = [
+      ?first,
+      ?last,
+    ].join(' ').trim();
+
+    return SalesAssignee(
+      id: jsonString(
+        json['publicId'] ?? json['userPublicId'] ?? json['id'],
+      ),
+      name: composed.isNotEmpty
+          ? composed
+          : jsonString(
+              json['name'] ?? json['fullName'] ?? json['full_name'],
+              fallback: 'Sales user',
+            ),
+    );
+  }
 }
 
 class LeadActivity {
@@ -38,6 +61,8 @@ class LeadActivity {
     required this.createdAt,
     this.detail,
     this.createdBy,
+    this.oldValue,
+    this.newValue,
   });
 
   final String id;
@@ -46,6 +71,86 @@ class LeadActivity {
   final DateTime createdAt;
   final String? detail;
   final String? createdBy;
+  final String? oldValue;
+  final String? newValue;
+
+  factory LeadActivity.fromJson(Map<String, dynamic> json) {
+    final createdAt =
+        LeadSummary.parseDate(json['createdAt'] ?? json['created_at']) ??
+            DateTime.now();
+    final type = jsonString(
+      json['activityType'] ?? json['type'],
+      fallback: 'ACTIVITY',
+    );
+    final title = jsonString(
+      json['description'] ?? json['title'],
+      fallback: type,
+    );
+    final oldValue = jsonNullableString(json['oldValue']);
+    final newValue = jsonNullableString(json['newValue']);
+
+    final createdByRaw = json['createdBy'];
+    final createdByMap = createdByRaw is Map
+        ? Map<String, dynamic>.from(createdByRaw)
+        : const <String, dynamic>{};
+    final first = jsonNullableString(
+      createdByMap['firstName'] ?? createdByMap['first_name'],
+    );
+    final last = jsonNullableString(
+      createdByMap['lastName'] ?? createdByMap['last_name'],
+    );
+    final composed = [
+      ?first,
+      ?last,
+    ].join(' ').trim();
+
+    return LeadActivity(
+      id: jsonString(
+        json['publicId'] ?? json['id'],
+        fallback: '${type}_${createdAt.toUtc().toIso8601String()}',
+      ),
+      type: type,
+      title: title,
+      createdAt: createdAt,
+      detail: _detailFor(type: type, oldValue: oldValue, newValue: newValue),
+      createdBy: composed.isNotEmpty
+          ? composed
+          : jsonNullableString(
+              json['createdByName'] ??
+                  createdByMap['name'] ??
+                  createdByMap['fullName'] ??
+                  (createdByRaw is String ? createdByRaw : null),
+            ),
+      oldValue: oldValue,
+      newValue: newValue,
+    );
+  }
+
+  static String? _detailFor({
+    required String type,
+    String? oldValue,
+    String? newValue,
+  }) {
+    final normalized = type.trim().toUpperCase();
+    final hideRawIds = normalized == 'FOLLOW_UP_ADDED' ||
+        normalized == 'ASSIGNED' ||
+        normalized == 'LEAD_CREATED';
+
+    String display(String value) {
+      if (normalized == 'STAGE_CHANGED') {
+        return LeadStage.fromApi(value).label;
+      }
+      return value;
+    }
+
+    if (oldValue != null && newValue != null) {
+      return '${display(oldValue)} → ${display(newValue)}';
+    }
+    if (newValue != null && !hideRawIds) {
+      return display(newValue);
+    }
+    return null;
+  }
 }
 
 class LeadFollowUp {
@@ -54,6 +159,7 @@ class LeadFollowUp {
     required this.note,
     required this.reminderAt,
     required this.createdAt,
+    this.contactedAt,
     this.createdBy,
   });
 
@@ -61,7 +167,56 @@ class LeadFollowUp {
   final String note;
   final DateTime reminderAt;
   final DateTime createdAt;
+  final DateTime? contactedAt;
   final String? createdBy;
+
+  factory LeadFollowUp.fromJson(Map<String, dynamic> json) {
+    final now = DateTime.now();
+    final createdByRaw = json['createdBy'];
+    final createdByMap = createdByRaw is Map
+        ? Map<String, dynamic>.from(createdByRaw)
+        : const <String, dynamic>{};
+    final first = jsonNullableString(
+      createdByMap['firstName'] ?? createdByMap['first_name'],
+    );
+    final last = jsonNullableString(
+      createdByMap['lastName'] ?? createdByMap['last_name'],
+    );
+    final composed = [
+      ?first,
+      ?last,
+    ].join(' ').trim();
+
+    final contactedAt = LeadSummary.parseDate(json['contactedAt']);
+    final createdAt =
+        LeadSummary.parseDate(json['createdAt'] ?? json['created_at']) ??
+            contactedAt ??
+            now;
+
+    return LeadFollowUp(
+      id: jsonString(
+        json['publicId'] ?? json['followUpPublicId'] ?? json['id'],
+      ),
+      note: jsonString(
+        json['discussion'] ?? json['note'],
+        fallback: 'Follow-up',
+      ),
+      reminderAt: LeadSummary.parseDate(
+            json['nextFollowUpAt'] ?? json['reminderAt'],
+          ) ??
+          createdAt,
+      createdAt: createdAt,
+      contactedAt: contactedAt,
+      createdBy: composed.isNotEmpty
+          ? composed
+          : jsonNullableString(
+              json['createdByName'] ??
+                  createdByMap['name'] ??
+                  createdByMap['fullName'] ??
+                  (createdByRaw is String ? createdByRaw : null),
+            ),
+    );
+  }
 }
 
 class LeadSummary {
@@ -145,4 +300,113 @@ class LeadSummary {
       activities: activities ?? this.activities,
     );
   }
+
+  factory LeadSummary.fromJson(Map<String, dynamic> json) {
+    final now = DateTime.now();
+    final assigned = json['assignedEmployee'] ?? json['assignedUser'];
+    final assignedMap = assigned is Map
+        ? Map<String, dynamic>.from(assigned)
+        : const <String, dynamic>{};
+    final assignedName = () {
+      final first = jsonNullableString(
+        assignedMap['firstName'] ?? assignedMap['first_name'],
+      );
+      final last = jsonNullableString(
+        assignedMap['lastName'] ?? assignedMap['last_name'],
+      );
+      final composed = [
+        ?first,
+        ?last,
+      ].join(' ').trim();
+      if (composed.isNotEmpty) return composed;
+      return jsonNullableString(
+        json['assignedUserName'] ??
+            assignedMap['name'] ??
+            assignedMap['fullName'],
+      );
+    }();
+    final createdAt =
+        parseDate(json['createdAt'] ?? json['created_at']) ?? now;
+
+    return LeadSummary(
+      id: jsonString(
+        json['leadPublicId'] ?? json['publicId'] ?? json['id'],
+        fallback: jsonString(json['leadId']),
+      ),
+      name: jsonString(json['name'], fallback: 'Lead'),
+      mobile: jsonString(json['mobile']),
+      productInterest: jsonString(
+        json['productInterest'] ?? json['product_interest'],
+      ),
+      stage: LeadStage.fromApi(jsonNullableString(json['stage'])),
+      assignedUserId: jsonNullableString(
+        json['assignedUserPublicId'] ??
+            json['assignedUserId'] ??
+            assignedMap['publicId'] ??
+            assignedMap['id'],
+      ),
+      assignedUserName: assignedName,
+      nextFollowUpAt: parseDate(
+        json['nextFollowUpAt'] ?? json['next_follow_up_at'],
+      ),
+      notes: jsonNullableString(json['notes']),
+      createdAt: createdAt,
+      updatedAt:
+          parseDate(json['updatedAt'] ?? json['updated_at']) ?? createdAt,
+    );
+  }
+
+  static DateTime? parseDate(Object? value) {
+    final raw = jsonNullableString(value);
+    if (raw == null) return null;
+    return DateTime.tryParse(raw);
+  }
+}
+
+class LeadsPage {
+  const LeadsPage({
+    required this.content,
+    required this.last,
+    required this.page,
+    required this.size,
+    required this.totalElements,
+    required this.totalPages,
+  });
+
+  final List<LeadSummary> content;
+  final bool last;
+  final int page;
+  final int size;
+  final int totalElements;
+  final int totalPages;
+
+  factory LeadsPage.fromJson(Map<String, dynamic> json) {
+    final rawContent = json['content'];
+    final content = <LeadSummary>[];
+    if (rawContent is List) {
+      for (final item in rawContent) {
+        if (item is Map) {
+          content.add(LeadSummary.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+
+    return LeadsPage(
+      content: content,
+      last: json['last'] == true,
+      page: jsonInt(json['page']),
+      size: jsonInt(json['size'], fallback: 20),
+      totalElements: jsonInt(json['totalElements']),
+      totalPages: jsonInt(json['totalPages']),
+    );
+  }
+
+  static const empty = LeadsPage(
+    content: [],
+    last: true,
+    page: 0,
+    size: 20,
+    totalElements: 0,
+    totalPages: 0,
+  );
 }

@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/app_scope.dart';
 import '../../app/theme/app_colors.dart';
+import '../../core/network/api_exception.dart';
 import '../../core/widgets/app_snackbar.dart';
 import '../../data/models/lead_models.dart';
+import '../../data/models/product_entry.dart';
 import '../../data/repositories/crm_repository.dart';
+import '../../data/repositories/dashboard_repository.dart';
 
 class AddEditLeadPage extends StatefulWidget {
   const AddEditLeadPage({this.leadId, super.key});
@@ -22,41 +26,140 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _mobileController = TextEditingController();
-  final _productController = TextEditingController();
   final _notesController = TextEditingController();
 
   LeadStage _stage = LeadStage.newLead;
+  String? _selectedProductId;
+  String? _pendingProductInterest;
   String? _assigneeId;
   DateTime? _nextFollowUpAt;
   bool _isLoading = false;
   bool _isSaving = false;
+  bool _assigneesLoading = true;
+  bool _productsLoading = true;
+  List<SalesAssignee> _assignees = const [];
+  List<ProductEntry> _products = const [];
   LeadSummary? _existing;
 
   bool get _isEditing => widget.leadId != null;
 
+  ProductEntry? get _selectedProduct {
+    for (final product in _products) {
+      if (product.id == _selectedProductId) return product;
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
-    if (_isEditing) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _loadLead();
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadAssignees();
+      _loadProducts();
+      if (_isEditing) _loadLead();
+    });
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _mobileController.dispose();
-    _productController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadAssignees() async {
+    setState(() => _assigneesLoading = true);
+    try {
+      final assignees = await CrmRepository(
+        AppScope.of(context).apiClient,
+      ).fetchSalesAssignees();
+      if (!mounted) return;
+      setState(() {
+        _assignees = assignees;
+        _assigneesLoading = false;
+        if (_assigneeId != null &&
+            !_assignees.any((user) => user.id == _assigneeId)) {
+          _assigneeId = null;
+        }
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _assignees = const [];
+        _assigneesLoading = false;
+      });
+      showAppMessage(context, 'Unable to load sales users', error.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _assignees = const [];
+        _assigneesLoading = false;
+      });
+      showAppMessage(
+        context,
+        'Unable to load sales users',
+        'Please try again.',
+      );
+    }
+  }
+
+  Future<void> _loadProducts() async {
+    setState(() => _productsLoading = true);
+    try {
+      final products = await DashboardRepository(
+        AppScope.of(context).apiClient,
+      ).fetchCategories();
+      if (!mounted) return;
+      setState(() {
+        _products = products;
+        _productsLoading = false;
+        _selectedProductId = _resolveProductId(
+          _pendingProductInterest ?? _selectedProductId,
+        );
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _products = const [];
+        _productsLoading = false;
+      });
+      showAppMessage(context, 'Unable to load products', error.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _products = const [];
+        _productsLoading = false;
+      });
+      showAppMessage(
+        context,
+        'Unable to load products',
+        'Please try again.',
+      );
+    }
+  }
+
+  String? _resolveProductId(String? raw) {
+    final value = raw?.trim();
+    if (value == null || value.isEmpty || _products.isEmpty) return null;
+    final normalized = value.toUpperCase();
+    for (final product in _products) {
+      final id = product.id.trim().toUpperCase();
+      final category = product.productCategory.trim().toUpperCase();
+      if (id == normalized || category == normalized) {
+        return product.id;
+      }
+    }
+    return null;
   }
 
   Future<void> _loadLead() async {
     setState(() => _isLoading = true);
     try {
-      final lead = await CrmRepository.instance.getLead(widget.leadId!);
+      final lead = await CrmRepository(
+        AppScope.of(context).apiClient,
+      ).getLead(widget.leadId!);
       if (!mounted) return;
       if (lead == null) {
         showAppMessage(context, 'Unavailable', 'Lead could not be found.');
@@ -67,10 +170,16 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
         _existing = lead;
         _nameController.text = lead.name;
         _mobileController.text = lead.mobile;
-        _productController.text = lead.productInterest;
+        _pendingProductInterest = lead.productInterest;
+        _selectedProductId = _resolveProductId(lead.productInterest);
         _notesController.text = lead.notes ?? '';
         _stage = lead.stage;
         _assigneeId = lead.assignedUserId;
+        if (_assignees.isNotEmpty &&
+            _assigneeId != null &&
+            !_assignees.any((user) => user.id == _assigneeId)) {
+          _assigneeId = null;
+        }
         _nextFollowUpAt = lead.nextFollowUpAt;
         _isLoading = false;
       });
@@ -129,21 +238,24 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
     if (form == null || !form.validate()) return;
 
     SalesAssignee? assignee;
-    for (final item in CrmRepository.assignees) {
+    for (final item in _assignees) {
       if (item.id == _assigneeId) {
         assignee = item;
         break;
       }
     }
+    final product = _selectedProduct;
+    if (product == null) return;
 
     setState(() => _isSaving = true);
+    final repository = CrmRepository(AppScope.of(context).apiClient);
     try {
       if (_isEditing) {
-        await CrmRepository.instance.updateLead(
+        await repository.updateLead(
           id: widget.leadId!,
           name: _nameController.text,
           mobile: _mobileController.text,
-          productInterest: _productController.text,
+          productInterest: product.productCategory,
           stage: _stage,
           assignedUserId: assignee?.id,
           assignedUserName: assignee?.name,
@@ -151,10 +263,10 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
           notes: _notesController.text,
         );
       } else {
-        await CrmRepository.instance.createLead(
+        await repository.createLead(
           name: _nameController.text,
           mobile: _mobileController.text,
-          productInterest: _productController.text,
+          productInterest: product.productCategory,
           stage: _stage,
           assignedUserId: assignee?.id,
           assignedUserName: assignee?.name,
@@ -167,10 +279,17 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
         context,
         _isEditing ? 'Lead updated' : 'Lead created',
         _isEditing
-            ? 'Lead details saved locally.'
-            : 'Lead added to the CRM list.',
+            ? 'Lead updated successfully.'
+            : 'Lead created successfully.',
       );
       context.pop(true);
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      showAppMessage(
+        context,
+        _isEditing ? 'Unable to update lead' : 'Unable to create lead',
+        error.message,
+      );
     } catch (_) {
       if (!mounted) return;
       showAppMessage(
@@ -262,16 +381,51 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
                             const SizedBox(height: 18),
                             _LabeledField(
                               label: 'Product Interest',
-                              child: TextFormField(
-                                controller: _productController,
-                                textCapitalization: TextCapitalization.words,
-                                textInputAction: TextInputAction.next,
-                                decoration: _inputDecoration(
-                                  'e.g. Health Insurance',
-                                ),
-                                validator: (value) =>
-                                    _required(value, 'Product interest'),
-                              ),
+                              child: _productsLoading
+                                  ? const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.4,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : DropdownButtonFormField<String>(
+                                      key: ValueKey(
+                                        'lead-product-${_selectedProductId ?? 'none'}-${_products.length}',
+                                      ),
+                                      initialValue: _selectedProductId,
+                                      decoration: _inputDecoration(
+                                        _products.isEmpty
+                                            ? 'No products found'
+                                            : 'Select product',
+                                      ),
+                                      items: [
+                                        for (final product in _products)
+                                          DropdownMenuItem(
+                                            value: product.id,
+                                            child: Text(product.productCategory),
+                                          ),
+                                      ],
+                                      onChanged: _isSaving
+                                          ? null
+                                          : (value) {
+                                              setState(
+                                                () =>
+                                                    _selectedProductId = value,
+                                              );
+                                            },
+                                      validator: (value) => value == null
+                                          ? 'Product interest is required'
+                                          : null,
+                                    ),
                             ),
                             const SizedBox(height: 18),
                             _LabeledField(
@@ -299,31 +453,51 @@ class _AddEditLeadPageState extends State<AddEditLeadPage> {
                             _LabeledField(
                               label: 'Assigned User',
                               required: false,
-                              child: DropdownButtonFormField<String?>(
-                                key: ValueKey(
-                                  'lead-assignee-${_assigneeId ?? 'none'}',
-                                ),
-                                initialValue: _assigneeId,
-                                decoration: _inputDecoration(
-                                  'Select sales user',
-                                ),
-                                items: [
-                                  const DropdownMenuItem<String?>(
-                                    value: null,
-                                    child: Text('Unassigned'),
-                                  ),
-                                  for (final user in CrmRepository.assignees)
-                                    DropdownMenuItem(
-                                      value: user.id,
-                                      child: Text(user.name),
+                              child: _assigneesLoading
+                                  ? const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                        vertical: 12,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.4,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : DropdownButtonFormField<String?>(
+                                      key: ValueKey(
+                                        'lead-assignee-${_assigneeId ?? 'none'}-${_assignees.length}',
+                                      ),
+                                      initialValue: _assigneeId,
+                                      decoration: _inputDecoration(
+                                        _assignees.isEmpty
+                                            ? 'No sales users found'
+                                            : 'Select sales user',
+                                      ),
+                                      items: [
+                                        const DropdownMenuItem<String?>(
+                                          value: null,
+                                          child: Text('Unassigned'),
+                                        ),
+                                        for (final user in _assignees)
+                                          DropdownMenuItem(
+                                            value: user.id,
+                                            child: Text(user.name),
+                                          ),
+                                      ],
+                                      onChanged: _isSaving
+                                          ? null
+                                          : (value) {
+                                              setState(
+                                                () => _assigneeId = value,
+                                              );
+                                            },
                                     ),
-                                ],
-                                onChanged: _isSaving
-                                    ? null
-                                    : (value) {
-                                        setState(() => _assigneeId = value);
-                                      },
-                              ),
                             ),
                             const SizedBox(height: 18),
                             _LabeledField(

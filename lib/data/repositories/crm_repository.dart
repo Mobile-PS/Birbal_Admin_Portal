@@ -1,137 +1,48 @@
+import 'package:flutter/foundation.dart';
+
+import '../../core/constants/api_endpoints.dart';
+import '../../core/network/api_client.dart';
+import '../../core/network/api_exception.dart';
+import '../../core/network/api_response.dart';
+import '../../core/utils/json_utils.dart';
 import '../models/lead_models.dart';
 
-/// Local CRM store used until lead / follow-up APIs are available.
+/// CRM repository.
 ///
-/// Replace method bodies with Dio calls once endpoints are ready. Keep the
-/// public method signatures so UI wiring stays stable.
+/// List/create/update/follow-up use live APIs. Detail still uses a local
+/// cache (hydrated from list/create/update/follow-up) until a detail endpoint
+/// is wired.
 class CrmRepository {
-  CrmRepository._();
+  CrmRepository(this._client);
 
-  static final CrmRepository instance = CrmRepository._();
+  final ApiClient _client;
 
-  static const assignees = <SalesAssignee>[
-    SalesAssignee(id: 'sales-1', name: 'Anita Sharma'),
-    SalesAssignee(id: 'sales-2', name: 'Rahul Mehta'),
-    SalesAssignee(id: 'sales-3', name: 'Priya Nair'),
-  ];
+  static final List<LeadSummary> _leads = [];
+  static var _sequence = 0;
 
-  final List<LeadSummary> _leads = [];
-  var _seeded = false;
-  var _sequence = 0;
+  @visibleForTesting
+  static void resetForTest() {
+    _leads.clear();
+    _sequence = 0;
+  }
 
-  void _ensureSeeded() {
-    if (_seeded) return;
-    _seeded = true;
-    final now = DateTime.now();
+  /// Loads staff users for the assignee dropdown via `GET /users/staff-directory`.
+  Future<List<SalesAssignee>> fetchSalesAssignees() async {
+    final data = await _client.get(ApiEndpoints.usersStaffDirectory);
 
-    _leads.addAll([
-      LeadSummary(
-        id: _nextId(),
-        name: 'Sneha Patil',
-        mobile: '9876543210',
-        productInterest: 'Health Insurance',
-        stage: LeadStage.newLead,
-        assignedUserId: 'sales-1',
-        assignedUserName: 'Anita Sharma',
-        nextFollowUpAt: now.add(const Duration(days: 1)),
-        notes: 'Inbound WhatsApp enquiry about family floater.',
-        createdAt: now.subtract(const Duration(hours: 5)),
-        updatedAt: now.subtract(const Duration(hours: 5)),
-        activities: [
-          LeadActivity(
-            id: _nextId(),
-            type: 'CREATED',
-            title: 'Lead created',
-            detail: 'Source: WhatsApp enquiry',
-            createdAt: now.subtract(const Duration(hours: 5)),
-            createdBy: 'System',
-          ),
-        ],
-      ),
-      LeadSummary(
-        id: _nextId(),
-        name: 'Vikram Desai',
-        mobile: '9123456780',
-        productInterest: 'Term Life',
-        stage: LeadStage.followUp,
-        assignedUserId: 'sales-2',
-        assignedUserName: 'Rahul Mehta',
-        nextFollowUpAt: now.add(const Duration(hours: 6)),
-        notes: 'Asked for comparison between two term plans.',
-        createdAt: now.subtract(const Duration(days: 2)),
-        updatedAt: now.subtract(const Duration(hours: 8)),
-        followUps: [
-          LeadFollowUp(
-            id: _nextId(),
-            note: 'Shared brochure. Waiting for nominee details.',
-            reminderAt: now.add(const Duration(hours: 6)),
-            createdAt: now.subtract(const Duration(hours: 8)),
-            createdBy: 'Rahul Mehta',
-          ),
-        ],
-        activities: [
-          LeadActivity(
-            id: _nextId(),
-            type: 'CREATED',
-            title: 'Lead created',
-            createdAt: now.subtract(const Duration(days: 2)),
-            createdBy: 'System',
-          ),
-          LeadActivity(
-            id: _nextId(),
-            type: 'STAGE',
-            title: 'Stage updated to Contacted',
-            createdAt: now.subtract(const Duration(days: 1, hours: 4)),
-            createdBy: 'Rahul Mehta',
-          ),
-          LeadActivity(
-            id: _nextId(),
-            type: 'FOLLOW_UP',
-            title: 'Follow-up logged',
-            detail: 'Shared brochure. Waiting for nominee details.',
-            createdAt: now.subtract(const Duration(hours: 8)),
-            createdBy: 'Rahul Mehta',
-          ),
-          LeadActivity(
-            id: _nextId(),
-            type: 'STAGE',
-            title: 'Stage updated to Follow Up',
-            createdAt: now.subtract(const Duration(hours: 8)),
-            createdBy: 'Rahul Mehta',
-          ),
-        ],
-      ),
-      LeadSummary(
-        id: _nextId(),
-        name: 'Meera Joshi',
-        mobile: '9988776655',
-        productInterest: 'Motor Insurance',
-        stage: LeadStage.documentsPending,
-        assignedUserId: 'sales-3',
-        assignedUserName: 'Priya Nair',
-        nextFollowUpAt: now.add(const Duration(days: 2)),
-        notes: 'RC copy pending from customer.',
-        createdAt: now.subtract(const Duration(days: 4)),
-        updatedAt: now.subtract(const Duration(days: 1)),
-        activities: [
-          LeadActivity(
-            id: _nextId(),
-            type: 'CREATED',
-            title: 'Lead created',
-            createdAt: now.subtract(const Duration(days: 4)),
-            createdBy: 'System',
-          ),
-          LeadActivity(
-            id: _nextId(),
-            type: 'STAGE',
-            title: 'Stage updated to Documents Pending',
-            detail: 'Awaiting RC and previous policy copy',
-            createdAt: now.subtract(const Duration(days: 1)),
-            createdBy: 'Priya Nair',
-          ),
-        ],
-      ),
-    ]);
+    if (data is! Map) {
+      throw const ApiException(
+        'Unexpected response while loading sales users.',
+      );
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    return ApiResponse.dataList(body)
+        .map(SalesAssignee.fromJson)
+        .where((user) => user.id.isNotEmpty)
+        .toList(growable: false);
   }
 
   String _nextId() {
@@ -139,24 +50,107 @@ class CrmRepository {
     return 'lead-local-$_sequence';
   }
 
-  Future<List<LeadSummary>> fetchLeads({LeadStage? stage}) async {
-    _ensureSeeded();
-    await Future<void>.delayed(const Duration(milliseconds: 180));
-    final items = List<LeadSummary>.from(_leads);
-    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    if (stage == null) return items;
-    return items.where((lead) => lead.stage == stage).toList(growable: false);
+  void _upsertLead(LeadSummary lead) {
+    final index = _leads.indexWhere((item) => item.id == lead.id);
+    if (index < 0) {
+      _leads.insert(0, lead);
+      return;
+    }
+
+    final existing = _leads[index];
+    _leads[index] = lead.copyWith(
+      notes: lead.notes ?? existing.notes,
+      followUps: lead.followUps.isNotEmpty ? lead.followUps : existing.followUps,
+      activities:
+          lead.activities.isNotEmpty ? lead.activities : existing.activities,
+    );
+  }
+
+  /// Loads leads via `GET /crm/leads`.
+  Future<LeadsPage> fetchLeads({
+    LeadStage? stage,
+    int page = 0,
+    int size = 20,
+  }) async {
+    final data = await _client.get(
+      ApiEndpoints.crmLeads,
+      queryParameters: {
+        'stage': stage?.apiValue ?? '',
+        'page': page,
+        'size': size,
+      },
+    );
+
+    if (data is! Map) {
+      throw const ApiException('Unexpected response while loading leads.');
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    final pageData = LeadsPage.fromJson(ApiResponse.dataMap(body));
+    for (final lead in pageData.content) {
+      _upsertLead(lead);
+    }
+    return pageData;
   }
 
   Future<LeadSummary?> getLead(String id) async {
-    _ensureSeeded();
-    await Future<void>.delayed(const Duration(milliseconds: 120));
     for (final lead in _leads) {
       if (lead.id == id) return lead;
     }
     return null;
   }
 
+  /// Loads follow-ups via `GET /crm/leads/{leadId}/follow-ups`.
+  Future<List<LeadFollowUp>> fetchFollowUps(String leadId) async {
+    final data = await _client.get(ApiEndpoints.crmLeadFollowUps(leadId));
+
+    if (data is! Map) {
+      throw const ApiException(
+        'Unexpected response while loading follow-ups.',
+      );
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    final followUps = ApiResponse.dataList(body)
+        .map(LeadFollowUp.fromJson)
+        .toList(growable: false);
+
+    final existing = await getLead(leadId);
+    if (existing != null) {
+      _upsertLead(existing.copyWith(followUps: followUps));
+    }
+    return followUps;
+  }
+
+  /// Loads activities via `GET /crm/leads/{leadId}/activities`.
+  Future<List<LeadActivity>> fetchActivities(String leadId) async {
+    final data = await _client.get(ApiEndpoints.crmLeadActivities(leadId));
+
+    if (data is! Map) {
+      throw const ApiException(
+        'Unexpected response while loading activities.',
+      );
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    final activities = ApiResponse.dataList(body)
+        .map(LeadActivity.fromJson)
+        .toList(growable: false);
+
+    final existing = await getLead(leadId);
+    if (existing != null) {
+      _upsertLead(existing.copyWith(activities: activities));
+    }
+    return activities;
+  }
+
+  /// Creates a lead via `POST /crm/leads`.
   Future<LeadSummary> createLead({
     required String name,
     required String mobile,
@@ -167,36 +161,68 @@ class CrmRepository {
     DateTime? nextFollowUpAt,
     String? notes,
   }) async {
-    _ensureSeeded();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
+    final cleanedNotes = notes?.trim();
+    final payload = <String, dynamic>{
+      'name': name.trim(),
+      'mobile': mobile.trim(),
+      'productInterest': productInterest.trim(),
+      'stage': stage.apiValue,
+      if (assignedUserId != null && assignedUserId.trim().isNotEmpty)
+        'assignedUserPublicId': assignedUserId.trim(),
+      if (nextFollowUpAt != null)
+        'nextFollowUpAt': nextFollowUpAt.toUtc().toIso8601String(),
+      if (cleanedNotes != null && cleanedNotes.isNotEmpty) 'notes': cleanedNotes,
+    };
+
+    final data = await _client.post(ApiEndpoints.crmLeads, data: payload);
+
+    if (data is! Map) {
+      throw const ApiException('Unexpected response while creating lead.');
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
     final now = DateTime.now();
-    final lead = LeadSummary(
+    final responseData = ApiResponse.dataMap(body);
+    final createdActivity = LeadActivity(
       id: _nextId(),
-      name: name.trim(),
-      mobile: mobile.trim(),
-      productInterest: productInterest.trim(),
-      stage: stage,
-      assignedUserId: assignedUserId,
-      assignedUserName: assignedUserName,
-      nextFollowUpAt: nextFollowUpAt,
-      notes: notes?.trim().isEmpty == true ? null : notes?.trim(),
+      type: 'CREATED',
+      title: 'Lead created',
+      detail: cleanedNotes,
       createdAt: now,
-      updatedAt: now,
-      activities: [
-        LeadActivity(
-          id: _nextId(),
-          type: 'CREATED',
-          title: 'Lead created',
-          detail: notes?.trim().isNotEmpty == true ? notes!.trim() : null,
-          createdAt: now,
-          createdBy: assignedUserName ?? 'Admin',
-        ),
-      ],
+      createdBy: assignedUserName ?? 'Admin',
     );
-    _leads.insert(0, lead);
+    final lead = responseData.isEmpty
+        ? LeadSummary(
+            id: _nextId(),
+            name: name.trim(),
+            mobile: mobile.trim(),
+            productInterest: productInterest.trim(),
+            stage: stage,
+            assignedUserId: assignedUserId,
+            assignedUserName: assignedUserName,
+            nextFollowUpAt: nextFollowUpAt,
+            notes: (cleanedNotes == null || cleanedNotes.isEmpty)
+                ? null
+                : cleanedNotes,
+            createdAt: now,
+            updatedAt: now,
+            activities: [createdActivity],
+          )
+        : LeadSummary.fromJson(responseData).copyWith(
+            assignedUserName: assignedUserName,
+            activities: [createdActivity],
+          );
+
+    _upsertLead(lead);
     return lead;
   }
 
+  /// Updates a lead via `PUT /crm/leads/{leadId}`.
+  ///
+  /// Stage is applied separately via `PATCH /crm/leads/{leadId}/stage` when it
+  /// changes.
   Future<LeadSummary> updateLead({
     required String id,
     required String name,
@@ -208,18 +234,33 @@ class CrmRepository {
     DateTime? nextFollowUpAt,
     String? notes,
   }) async {
-    _ensureSeeded();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    final index = _leads.indexWhere((lead) => lead.id == id);
-    if (index < 0) {
-      throw StateError('Lead not found.');
+    final cleanedNotes = notes?.trim();
+    final payload = <String, dynamic>{
+      'name': name.trim(),
+      'mobile': mobile.trim(),
+      'productInterest': productInterest.trim(),
+      if (assignedUserId != null && assignedUserId.trim().isNotEmpty)
+        'assignedUserPublicId': assignedUserId.trim(),
+      if (nextFollowUpAt != null)
+        'nextFollowUpAt': nextFollowUpAt.toUtc().toIso8601String(),
+      if (cleanedNotes != null && cleanedNotes.isNotEmpty) 'notes': cleanedNotes,
+    };
+
+    final data = await _client.put(ApiEndpoints.crmLead(id), data: payload);
+
+    if (data is! Map) {
+      throw const ApiException('Unexpected response while updating lead.');
     }
 
-    final existing = _leads[index];
-    final now = DateTime.now();
-    final activities = List<LeadActivity>.from(existing.activities);
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
 
-    if (existing.stage != stage) {
+    final now = DateTime.now();
+    final existing = await getLead(id);
+    final responseData = ApiResponse.dataMap(body);
+    final activities = List<LeadActivity>.from(existing?.activities ?? const []);
+
+    if (existing != null && existing.stage != stage) {
       activities.insert(
         0,
         LeadActivity(
@@ -232,8 +273,8 @@ class CrmRepository {
       );
     }
 
-    final cleanedNotes = notes?.trim();
-    if ((cleanedNotes ?? '') != (existing.notes ?? '')) {
+    if (existing != null &&
+        (cleanedNotes ?? '') != (existing.notes ?? '')) {
       activities.insert(
         0,
         LeadActivity(
@@ -247,46 +288,91 @@ class CrmRepository {
       );
     }
 
-    final updated = existing.copyWith(
-      name: name.trim(),
-      mobile: mobile.trim(),
-      productInterest: productInterest.trim(),
-      stage: stage,
-      assignedUserId: assignedUserId,
-      assignedUserName: assignedUserName,
-      nextFollowUpAt: nextFollowUpAt,
-      notes: cleanedNotes?.isEmpty == true ? null : cleanedNotes,
-      clearAssignee: assignedUserId == null,
-      clearNextFollowUp: nextFollowUpAt == null,
-      clearNotes: cleanedNotes == null || cleanedNotes.isEmpty,
-      updatedAt: now,
-      activities: activities,
-    );
-    _leads[index] = updated;
+    final parsed = responseData.isEmpty
+        ? null
+        : LeadSummary.fromJson(responseData);
+    final updated = (parsed ??
+            existing ??
+            LeadSummary(
+              id: id,
+              name: name.trim(),
+              mobile: mobile.trim(),
+              productInterest: productInterest.trim(),
+              stage: stage,
+              createdAt: now,
+              updatedAt: now,
+            ))
+        .copyWith(
+          name: name.trim(),
+          mobile: mobile.trim(),
+          productInterest: productInterest.trim(),
+          stage: stage,
+          assignedUserId: assignedUserId ?? parsed?.assignedUserId,
+          assignedUserName: assignedUserName ?? parsed?.assignedUserName,
+          nextFollowUpAt: nextFollowUpAt ?? parsed?.nextFollowUpAt,
+          notes: cleanedNotes?.isEmpty == true
+              ? null
+              : (cleanedNotes ?? parsed?.notes ?? existing?.notes),
+          clearAssignee: assignedUserId == null && parsed?.assignedUserId == null,
+          clearNextFollowUp:
+              nextFollowUpAt == null && parsed?.nextFollowUpAt == null,
+          clearNotes: cleanedNotes == null || cleanedNotes.isEmpty,
+          updatedAt: now,
+          activities: activities,
+          followUps: existing?.followUps ?? parsed?.followUps,
+        );
+
+    _upsertLead(updated);
+
+    if (existing != null && existing.stage != stage) {
+      return updateStage(leadId: id, stage: stage);
+    }
     return updated;
   }
 
+  /// Adds a follow-up via `POST /crm/leads/{leadId}/follow-ups`.
   Future<LeadSummary> addFollowUp({
     required String leadId,
     required String note,
+    required DateTime contactedAt,
     required DateTime reminderAt,
     String? createdBy,
   }) async {
-    _ensureSeeded();
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    final index = _leads.indexWhere((lead) => lead.id == leadId);
-    if (index < 0) {
-      throw StateError('Lead not found.');
+    final discussion = note.trim();
+    final payload = <String, dynamic>{
+      'discussion': discussion,
+      'contactedAt': contactedAt.toUtc().toIso8601String(),
+      'nextFollowUpAt': reminderAt.toUtc().toIso8601String(),
+    };
+
+    final data = await _client.post(
+      ApiEndpoints.crmLeadFollowUps(leadId),
+      data: payload,
+    );
+
+    if (data is! Map) {
+      throw const ApiException('Unexpected response while saving follow-up.');
     }
 
-    final existing = _leads[index];
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    final existing = await getLead(leadId);
     final now = DateTime.now();
+    final responseData = ApiResponse.dataMap(body);
+
+    final followUpId = jsonString(
+      responseData['publicId'] ??
+          responseData['followUpPublicId'] ??
+          responseData['id'],
+      fallback: _nextId(),
+    );
     final followUp = LeadFollowUp(
-      id: _nextId(),
-      note: note.trim(),
-      reminderAt: reminderAt,
-      createdAt: now,
-      createdBy: createdBy ?? existing.assignedUserName ?? 'Admin',
+      id: followUpId,
+      note: jsonNullableString(responseData['discussion']) ?? discussion,
+      reminderAt: _parseDate(responseData['nextFollowUpAt']) ?? reminderAt,
+      createdAt: _parseDate(responseData['contactedAt']) ?? contactedAt,
+      createdBy: createdBy ?? existing?.assignedUserName ?? 'Admin',
     );
 
     final activities = [
@@ -298,41 +384,93 @@ class CrmRepository {
         createdAt: now,
         createdBy: followUp.createdBy,
       ),
-      ...existing.activities,
+      ...?existing?.activities,
     ];
 
-    final updated = existing.copyWith(
-      nextFollowUpAt: reminderAt,
-      stage: existing.stage == LeadStage.newLead
-          ? LeadStage.followUp
-          : existing.stage,
+    final base = existing ??
+        LeadSummary(
+          id: leadId,
+          name: 'Lead',
+          mobile: '',
+          productInterest: '',
+          stage: LeadStage.followUp,
+          createdAt: now,
+          updatedAt: now,
+        );
+
+    final updated = base.copyWith(
+      nextFollowUpAt: followUp.reminderAt,
+      stage: base.stage == LeadStage.newLead ? LeadStage.followUp : base.stage,
       updatedAt: now,
-      followUps: [followUp, ...existing.followUps],
+      followUps: [followUp, ...base.followUps],
       activities: activities,
     );
-    _leads[index] = updated;
+    _upsertLead(updated);
     return updated;
   }
 
+  DateTime? _parseDate(Object? value) {
+    final raw = value?.toString().trim();
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
+  /// Updates lead stage via `PATCH /crm/leads/{leadId}/stage`.
   Future<LeadSummary> updateStage({
     required String leadId,
     required LeadStage stage,
   }) async {
-    _ensureSeeded();
-    final existing = await getLead(leadId);
-    if (existing == null) {
-      throw StateError('Lead not found.');
-    }
-    return updateLead(
-      id: existing.id,
-      name: existing.name,
-      mobile: existing.mobile,
-      productInterest: existing.productInterest,
-      stage: stage,
-      assignedUserId: existing.assignedUserId,
-      assignedUserName: existing.assignedUserName,
-      nextFollowUpAt: existing.nextFollowUpAt,
-      notes: existing.notes,
+    final data = await _client.patch(
+      ApiEndpoints.crmLeadStage(leadId),
+      data: {'stage': stage.apiValue},
     );
+
+    if (data is! Map) {
+      throw const ApiException('Unexpected response while updating stage.');
+    }
+
+    final body = Map<String, dynamic>.from(data);
+    ApiResponse.ensureSuccess(body);
+
+    final now = DateTime.now();
+    final existing = await getLead(leadId);
+    final responseData = ApiResponse.dataMap(body);
+    final activities = List<LeadActivity>.from(existing?.activities ?? const []);
+
+    if (existing == null || existing.stage != stage) {
+      activities.insert(
+        0,
+        LeadActivity(
+          id: _nextId(),
+          type: 'STAGE',
+          title: 'Stage updated to ${stage.label}',
+          createdAt: now,
+          createdBy: existing?.assignedUserName ?? 'Admin',
+        ),
+      );
+    }
+
+    final parsed =
+        responseData.isEmpty ? null : LeadSummary.fromJson(responseData);
+    final updated = (parsed ??
+            existing ??
+            LeadSummary(
+              id: leadId,
+              name: 'Lead',
+              mobile: '',
+              productInterest: '',
+              stage: stage,
+              createdAt: now,
+              updatedAt: now,
+            ))
+        .copyWith(
+          stage: stage,
+          updatedAt: now,
+          activities: activities,
+          followUps: existing?.followUps ?? parsed?.followUps,
+        );
+
+    _upsertLead(updated);
+    return updated;
   }
 }

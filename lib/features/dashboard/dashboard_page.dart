@@ -5,6 +5,7 @@ import '../../app/app_scope.dart';
 import '../../app/theme/app_colors.dart';
 import '../../core/network/api_exception.dart';
 import '../../data/models/admin_dashboard_summary.dart';
+import '../../data/models/lead_models.dart';
 import '../../data/repositories/crm_repository.dart';
 import '../../data/repositories/dashboard_repository.dart';
 import '../shell/admin_page.dart';
@@ -39,12 +40,12 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       final results = await Future.wait([
         DashboardRepository(AppScope.of(context).apiClient).fetchDashboard(),
-        CrmRepository.instance.fetchLeads(),
+        CrmRepository(AppScope.of(context).apiClient).fetchLeads(),
       ]);
       if (!mounted) return;
       setState(() {
         _summary = results[0] as AdminDashboardSummary;
-        _totalLeads = (results[1] as List).length;
+        _totalLeads = (results[1] as LeadsPage).totalElements;
         _isLoading = false;
       });
     } on ApiException catch (error) {

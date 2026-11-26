@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/app_scope.dart';
 import '../../app/theme/app_colors.dart';
+import '../../core/network/api_exception.dart';
 import '../../data/models/lead_models.dart';
 import '../../data/repositories/crm_repository.dart';
 
@@ -41,10 +43,18 @@ class _CrmLeadsPageState extends State<CrmLeadsPage> {
       _error = null;
     });
     try {
-      final leads = await CrmRepository.instance.fetchLeads(stage: _stageFilter);
+      final page = await CrmRepository(
+        AppScope.of(context).apiClient,
+      ).fetchLeads(stage: _stageFilter);
       if (!mounted) return;
       setState(() {
-        _leads = leads;
+        _leads = page.content;
+        _isLoading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
         _isLoading = false;
       });
     } catch (_) {
@@ -132,7 +142,7 @@ class _CrmLeadsPageState extends State<CrmLeadsPage> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Local preview until lead APIs are ready. Data resets when the app restarts.',
+                      'Leads, create, update, and follow-ups use the live API.',
                       style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 12.5,
